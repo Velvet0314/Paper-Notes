@@ -96,9 +96,66 @@
 
 ### 验证流程
 
+## 有关 WSL 与 SSH
+
+通过 SSH 远程访问 WSL 实现远程办公
+
+1. Zerotier 内网穿透
+
+	- 在 WSL 中下载 Zerotier，并启动服务
+	```bash
+	sudo systemctl enable zerotier-one
+	sudo systemctl start zerotier-one
+	```
+	- 加入 Zerotier 的网络
+	```bash
+	sudo zerotier-cli join <your-network-id>
+	```
+	- 查看 Zerotier 状态
+	```bash
+	sudo zerotier-cli status
+	```
+	- 找到当前为 WSL 分配的虚拟地址
+	```bash
+	sudo zerotier-cli listnetworks
+	```
+2. SSH 服务配置
+
+	- 下载并启动 SSH 服务
+	```bash
+	sudo service ssh start
+	```
+	- 检查 SSH 服务状态
+	```bash
+	sudo service ssh status
+	```
+3. 修改 SSH 配置
+
+	- 进入配置文件 `/etc/ssh/sshd_config`
+	```bash
+	sudo nano /etc/ssh/sshd_config
+	```
+	- 修改如下参数
+	```bash
+	Port 22 # 转发端口
+	PermitRootLogin prohibit-password # 允许 root 用户登录
+	AllowUsers <user_name> # 允许一般用户登录
+	PasswordAuthentocation yes # 启用远程登录密码
+	PermitUserEnvironment yes # 允许用户环境
+	```
+	- 重新启动 SSH 服务
+	```bash
+	sudo systemctl restart sshd
+	sudo service ssh restart
+	```
+4. 在 VSCode 中建立 Remote-SSH 连接
+	- 用户名为 WSL 的用户名
+	- 密码为 sudo 密码
 ## 一些疑问
 
 1. 什么是蛋白质口袋？
 	蛋白质口袋指的是蛋白质表面或内部的**三维结构凹陷区域**，该区域通常是其他分子（如配体、小分子药物或离子）与蛋白质发生结合或相互作用的地方。
 2. 代码
 3. 数学推导
+
+
