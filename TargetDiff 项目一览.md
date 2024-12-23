@@ -1,10 +1,10 @@
 ## 项目进度
 
 李青阳：TargetDiff论文阅读一遍+TargetDiff代码阅读
-	1. 训练部分代码 train_diffusion.py
-	2. 主要模型代码 molopt_score_model.py —— 算法部分对应的代码 
-	3. 数据输入代码 transform.py
-	4. 评估指标  evaluation_diifusion.py
+	1. 训练部分代码 `train_diffusion.py`
+	2. 主要模型代码 `molopt_score_model.py` —— 算法部分对应的代码 
+	3. 数据输入代码 `transform.py`
+	4. 评估指标  `evaluation_diifusion.py`
 	5. 能够进行模型训练、单步调试
 王琪皓：深度学习课程 —— softmax回归
 潘若溪：Python入门 —— 基础语法学习
@@ -81,7 +81,7 @@
 - 推荐在 Linux 下进行环境安装（可以用 WSL） —— Vina 需要 Linux 环境
 - 注意 Pytorch, Cuda, Python 的版本对应
 - 需要安装对应版本的 cudatoolkit 实现 Pytorch 中利用 cuda 进行 GPU 的加速
-- 我的环境在 myenvironment.yaml 中，可以跑通
+- 我的环境在 `myenvironment.yaml` 中，可以跑通
 
 ### 额外内容
 
@@ -90,11 +90,212 @@
 
 ### 训练流程
 
+主要代码在 `train_diffusion.py`和`molopt_score_model.py`中
 
+1. 解析命令行 —— 训练的超参数的设置
+2. 数据的预处理 —— 数据输入的预处理
+	- 主要是进行数据的映射与反映射
+3. 数据集处理 —— 数据加载与划分
+4. 初始化模型 —— 调用`molopt_score_model.py`中的模型
+5. 训练 —— 关键在 `model.get_diffusion_loss` 函数中
+	1. 生成时间步 —— 算法step2
+		```python
+		# sample noise levels
+		if time_step is None:
+			time_step, pt = self.sample_time(num_graphs, protein_pos.device, self.sample_time_method)
+		else:
+			pt = torch.ones_like(time_step).float() / self.num_timesteps
+			a = self.alphas_cumprod.index_select(0, time_step)  # (num_graphs, )
+		```
+	2. 质心归零 —— 算法step3
+		```python
+		protein_pos, ligand_pos, _ = center_pos(
+			protein_pos, ligand_pos, batch_protein, batch_ligand, mode=self.center_pos_mode)
+		```
+	3. 对 原子位置 pos & 原子类型 v 进行加噪 —— 算法step4&5
+		```python
+		# perturb pos and v
+		a_pos = a[batch_ligand].unsqueeze(-1)  # (num_ligand_atoms, 1)
+		pos_noise = torch.zeros_like(ligand_pos)
+		pos_noise.normal_()
+		# Xt = a.sqrt() * X0 + (1-a).sqrt() * eps
+		ligand_pos_perturbed = a_pos.sqrt() * ligand_pos + (1.0 - a_pos).sqrt() * pos_noise  # pos_noise * std
+		# Vt = a * V0 + (1-a) / K
+		log_ligand_v0 = index_to_log_onehot(ligand_v, self.num_classes)
+		ligand_v_perturbed, log_ligand_vt = self.q_v_sample(log_ligand_v0, time_step, batch_ligand)
+		```
+	4. 前向传播计算，得到每阶段加噪的结果和网络预测的噪声 —— 算法step6
+		```python
+		# forward-pass NN, feed perturbed pos and v, output noise
+		preds = self(
+			protein_pos=protein_pos,
+			protein_v=protein_v,
+			batch_protein=batch_protein,
+			init_ligand_pos=ligand_pos_perturbed,
+			init_ligand_v=ligand_v_perturbed,
+			batch_ligand=batch_ligand,
+			time_step=time_step
+		)
+		
+		pred_ligand_pos, pred_ligand_v = preds['pred_ligand_pos'], preds['pred_ligand_v']
+		
+		# 网络预测的噪声
+		pred_pos_noise = pred_ligand_pos - ligand_pos_perturbed
+		
+		# atom position
+		if self.model_mean_type == 'noise':
+			pos0_from_e = self._predict_x0_from_eps(
+				xt=ligand_pos_perturbed, eps=pred_pos_noise, t=time_step, batch=batch_ligand)
+			pos_model_mean = self.q_pos_posterior(
+				x0=pos0_from_e, xt=ligand_pos_perturbed, t=time_step, batch=batch_ligand)
+		
+		elif self.model_mean_type == 'C0':
+			pos_model_mean = self.q_pos_posterior(
+				x0=pred_ligand_pos, xt=ligand_pos_perturbed, t=time_step, batch=batch_ligand)
+		else:
+			raise ValueError
+		```
+	5. 计算后验分布与误差 —— 算法step7&8
+		```python
+		# atom pos loss
+		if self.model_mean_type == 'C0':
+			target, pred = ligand_pos, pred_ligand_pos
+		elif self.model_mean_type == 'noise':
+			target, pred = pos_noise, pred_pos_noise
+		else:
+			raise ValueError
+		
+		loss_pos = scatter_mean(((pred - target) ** 2).sum(-1), batch_ligand, dim=0)
+		loss_pos = torch.mean(loss_pos)
+		
+		# atom type loss
+		log_ligand_v_recon = F.log_softmax(pred_ligand_v, dim=-1)
+		log_v_model_prob = self.q_v_posterior(log_ligand_v_recon, log_ligand_vt, time_step, batch_ligand)
+		log_v_true_prob = self.q_v_posterior(log_ligand_v0, log_ligand_vt, time_step, batch_ligand)
+		kl_v = self.compute_v_Lt(log_v_model_prob=log_v_model_prob, log_v0=log_ligand_v0,
+			log_v_true_prob=log_v_true_prob, t=time_step, batch=batch_ligand)
+		
+		loss_v = torch.mean(kl_v)
+		loss = loss_pos + loss_v * self.loss_v_weight
+		```
 
 ### 采样流程
 
+主要代码在 `sample_diffusion.py`和`molopt_score_model.py`中
+
+1. 解析命令行 —— 采样的超参数的设置
+2. 加载训练好的模型 —— ckpt -> checkpoint
+3. 数据的预处理 —— 采用和模型训练时的相同的处理（所有的 config 均来自于选取的模型的训练时的配置）
+4. 初始化模型 —— 调用`molopt_score_model.py`中的模型
+5. 采样 —— 关键在 `sample_diffusion_ligand` 函数 和 `model.sample_diffusion` 函数中
+	1. 确定原子数量 —— 算法step1
+		```python
+		# 步骤一：确定原子数量
+		# 这里有三种方式，其中第一种对应算法中的步骤
+		if sample_num_atoms == 'prior':
+			# 根据先验分布采样配体原子数量
+			pocket_size = atom_num.get_space_size(data.protein_pos.detach().cpu().numpy())  # 计算口袋大小
+			ligand_num_atoms = [atom_num.sample_atom_num(pocket_size).astype(int) for _ in range(n_data)]  # 采样原子数量
+			batch_ligand = torch.repeat_interleave(torch.arange(n_data), torch.tensor(ligand_num_atoms)).to(device)  # 生成配体批次索引
+			
+		elif sample_num_atoms == 'range':
+			# 按顺序指定配体原子数量
+			ligand_num_atoms = list(range(current_i + 1, current_i + n_data + 1))  # 生成原子数量列表
+			batch_ligand = torch.repeat_interleave(torch.arange(n_data), torch.tensor(ligand_num_atoms)).to(device)  # 生成配体批次索引
+			
+		elif sample_num_atoms == 'ref':
+			# 使用参考数据的原子数量
+			batch_ligand = batch.ligand_element_batch  # 获取配体的批次索引
+			ligand_num_atoms = scatter_sum(torch.ones_like(batch_ligand), batch_ligand, dim=0).tolist()  # 计算每个样本的原子数量
+			    
+		else:
+			raise ValueError  # 抛出异常
+		```
+	2. 质心归零 —— 算法step2
+		```python
+		# 步骤二：初始化配体位置
+		center_pos = scatter_mean(batch.protein_pos, batch_protein, dim=0)  # 计算每个蛋白质的中心位置
+		batch_center_pos = center_pos[batch_ligand]  # 获取每个配体原子的中心位置
+		...
+		protein_pos, init_ligand_pos, offset = center_pos(
+			protein_pos, init_ligand_pos, batch_protein, batch_ligand, mode=center_pos_mode)
+		```
+	3. 采样初始化 —— 算法step3
+		```python
+		# 步骤三：采样初始化——原子位置
+		init_ligand_pos = batch_center_pos + torch.randn_like(batch_center_pos)  # 添加随机噪声，初始化配体位置
+		# 步骤三：采样初始化—原子类型
+		if pos_only:
+			# 如果仅采样位置，使用初始的配体特征
+			init_ligand_v = batch.ligand_atom_feature_full
+		else:
+			# 否则，从均匀分布中采样初始v值
+			# 算法中对应的步骤
+			uniform_logits = torch.zeros(len(batch_ligand), model.num_classes).to(device)  # 创建均匀分布的logits
+			init_ligand_v = log_sample_categorical(uniform_logits)  # 采样v值
+		```
+	4. 反转时间步 —— 算法step4
+		```python
+		# time sequence
+		# 反转时间步，从 T-1 到 0
+		time_seq = list(reversed(range(self.num_timesteps - num_steps, self.num_timesteps)))
+		```
+	5. 预测 —— 算法step5
+		```python
+		# 步骤五：从时间步 T 开始使用模型 ϕ₀ 从 [xₜ, vₜ] 预测 [x̂₀, v̂₀]
+		# self() 调用前向传播 forward()
+		preds = self(
+			protein_pos=protein_pos,
+			protein_v=protein_v,
+			batch_protein=batch_protein,
+			init_ligand_pos=ligand_pos,
+			init_ligand_v=ligand_v,
+			batch_ligand=batch_ligand,
+			time_step=t
+		)
+		
+		# Compute posterior mean and variance
+		if self.model_mean_type == 'noise':
+			pred_pos_noise = preds['pred_ligand_pos'] - ligand_pos
+			pos0_from_e = self._predict_x0_from_eps(xt=ligand_pos, eps=pred_pos_noise, t=t, batch=batch_ligand)
+			v0_from_e = preds['pred_ligand_v']
+			
+		elif self.model_mean_type == 'C0'
+			pos0_from_e = preds['pred_ligand_pos']
+			v0_from_e = preds['pred_ligand_v']
+			
+		else:
+			raise ValueError
+		```
+	6. 采样下一时间步的 原子位置 与 原子类型 —— 算法step6&7
+		```python
+		# 步骤六&七：由后验分布采样 [xₜ₋₁, vₜ₋₁]
+		pos_model_mean = self.q_pos_posterior(x0=pos0_from_e, xt=ligand_pos, t=t, batch=batch_ligand)
+		pos_log_variance = extract(self.posterior_logvar, t, batch_ligand)
+		
+		# no noise when t == 0
+		nonzero_mask = (1 - (t == 0).float())[batch_ligand].unsqueeze(-1)
+		ligand_pos_next = pos_model_mean + nonzero_mask * (0.5 * pos_log_variance).exp() * torch.randn_like(ligand_pos)
+		ligand_pos = ligand_pos_next
+		
+		# 若不只是采样位置，则采样原子类型 vₜ₋₁
+		if not pos_only:
+			log_ligand_v_recon = F.log_softmax(v0_from_e, dim=-1)
+			log_ligand_v = index_to_log_onehot(ligand_v, self.num_classes)
+			log_model_prob = self.q_v_posterior(log_ligand_v_recon, log_ligand_v, t, batch_ligand)
+			ligand_v_next = log_sample_categorical(log_model_prob)
+			
+			v0_pred_traj.append(log_ligand_v_recon.clone().cpu())
+			vt_pred_traj.append(log_model_prob.clone().cpu())
+			ligand_v = ligand_v_next
+			
+		ori_ligand_pos = ligand_pos + offset[batch_ligand]
+		pos_traj.append(ori_ligand_pos.clone().cpu())
+	    v_traj.append(ligand_v.clone().cpu())
+		```
 ### 验证流程
+
+还有待书写中...
 
 ## 有关 WSL 与 SSH
 
