@@ -12,9 +12,8 @@
 
 ## 后期规划
 
-进度提速
-- 预计是先快速完成TargetDiff的代码阅读和实验
-- 然后进行24ICLR Protein-Ligand Interaction Prior for Binding-aware 3D Molecule Diffusion Models的代码阅读和实验
+- [x] TargetDiff 代码阅读
+- [ ] ⭐进行24ICLR Protein-Ligand Interaction Prior for Binding-aware 3D Molecule Diffusion Models的代码阅读和实验
 
 ## TargetDiff 的目的
 
