@@ -13,12 +13,28 @@
 ## 后期规划
 
 - [x] TargetDiff 代码阅读
-- [ ] ⭐进行24ICLR Protein-Ligand Interaction Prior for Binding-aware 3D Molecule Diffusion Models的代码阅读和实验
+- [x] ⭐进行24ICLR Protein-Ligand Interaction Prior for Binding-aware 3D Molecule Diffusion Models的代码阅读和实验
 
 ## TargetDiff 的目的
 
 - 靶标感知分子生成
 - 生成分子的亲和力预测 —— 生成分子的质量评估
+
+## TargetDiff 的创新点
+
+1. 将**扩散模型**用于分子生成
+2. 在训练和采样过程中进行了 **“对齐”** —— 什么是对齐？
+	-  **非自回归（Non-autoregressive）的对齐**
+		- ​**传统自回归模型**​（如RNN/Transformer）在训练和生成时存在不一致性：训练时使用真实数据（Teacher Forcing），生成时却依赖模型自身预测（逐步生成，误差会累积）
+		- ​**TargetDiff** 通过非自回归的方式，在训练和采样时均采用**并行去噪**的机制，直接建模分子构象的整体分布，避免了自回归模型的误差累积问题，从而实现了训练与生成过程的数学对齐
+	-  ​**SE(3)-等变性（Equivariance）的对齐**
+		- ​**SE(3)-等变性**要求模型对三维空间中的平移、旋转等变换保持输出一致性（例如分子构象的物理合理性不因坐标系改变而改变）
+		    - ​**Shifting Center Operation（移位中心操作）​**：在扩散过程中动态调整分子结构的几何中心，确保生成过程的几何不变性
+		    - ​**Equivariant GNN（等变图神经网络）​**：网络设计满足SE(3)-等变性，即输入分子经过旋转/平移后，输出也会相应变换（如原子坐标的旋转同步更新）
+		- 这种等变性使得**训练时的几何约束**与**采样时的生成逻辑**完全一致，避免了传统方法因坐标变换导致的结构失真
+3. 提出了几种新的评估指标
+4. 提出一个有效评估生成的分子的质量的框架
+
 
 ## TargetDiff 理论
 ### TargetDiff 原理简述
@@ -56,7 +72,7 @@
 	- 均方误差 MSE：度量原子坐标的偏差
 	- KL 散度（KL-divergence）：度量类型分布的差异
 8. 更新参数： 最小化损失函数 $L$  来更新模型参数 $\theta$
-![[train_algorithm.png]]
+![[assets/targetdiff/train_algorithm.png]]
 ### TargetDiff 在干什么 —— 采样算法流程
 
 1. 输入：蛋白质结合位点（binding site）$\mathcal{P}$ 与 训练好的模型 $\phi_\theta$
@@ -70,7 +86,7 @@
 6. 预测：$[\hat{x}_0,\hat{v}_0]=\phi_\theta([xt, vt], t, \mathcal{P})$ ，预测扰动位置和类型，即 $\hat{x}_0$  和 $\hat{v}_0$ ，条件是当前的 $x_t$、$v_t$、时间步 $t$ 和蛋白质信息 $\mathcal{P}$
 7. 根据后验分布 $p_\theta(x_{t-1} | x_t, \hat{x}_0)$ 对原子位置 $\mathbf{x}_{t-1}$进行采样
 8. 根据后验分布 $p_\theta(v_{t-1} | v_t, \hat{v}_0)$ 对原子类型 $\mathbf{v}_{t-1}$ 进行采样
-![[sample_algorithm.png]]
+![[assets/targetdiff/sample_algorithm.png]]
 
 ## TargetDiff 代码
 
