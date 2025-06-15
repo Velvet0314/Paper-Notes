@@ -51,7 +51,6 @@
 	- 然后用 $\psi_{\theta_2}(\mathbf{F}_0^\mathcal{M}, t)$ 计算“交互驱动”的位置偏移  $\mathbf{S}_t^\mathcal{M}$ ，其公式是：
 	- $$\mathbf{S}_t^\mathcal{M} = \eta \cdot k_t \cdot \psi_{\theta_2}\bigl(\mathbf{F}_0^\mathcal{M}, t\bigr)$$
 	- 其中：$\eta$ 是整体缩放系数，$k_t$ 是时间步相关的缩放因子，用于让正向过程在早期或晚期产生不同幅度的偏移
-
 	- 在已有的正向扩散公式中，新的位置就是：
 	- 
    $$\mathbf{X}_t^\mathcal{M} = \sqrt{\bar{\alpha}_{\!t}}\,\mathbf{X}_0^\mathcal{M} + \mathbf{S}_t^\mathcal{M} \;+\; \sqrt{\,1-\bar{\alpha}_t\,}\,\epsilon$$
