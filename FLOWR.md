@@ -30,3 +30,30 @@
 				$$f(x;\alpha,\beta)=\frac{x^{\alpha-1}(1-x)^{\beta-1}}{B(\alpha,\beta)}$$
 				- 其中 $B(\alpha, \beta) = \int_0^1 t^{\alpha-1}(1-t)^{\beta-1} dt$，那么在 $\alpha = 2.0, \beta = 1.0$ 时其概率密度函数为 $f(x)=2x$，所以概率密度随着 $x$ 的增大而线性增加，这表示从这个分布中随机抽取一个数，**抽到接近 1 的数的可能性，要远大于抽到接近 0 的数**
 				- 意义：从纯噪声开始的早期阶段，向量场的方向相对简单（大致指向数据中心即可），可能不需要那么密集的训练，**对于生成高质量的分子而言，学习如何在最后阶段精确地去除少量噪声，比学习如何从一团乱麻中构建出大致轮廓更为关键和困难**
+	- 模型推理
+		- **目标**：生成一个配体，使其不仅在几何上与蛋白口袋相容，而且其一部分原子（我们称之为**固定原子**）必须精确地位于预先指定的位置，以满足特定的关键相互作用（如氢键、盐桥等）
+		- **配体表示**：
+			- 设 $\mathbf{X}_p = \{x_{p,j} \in \mathbb{R}^3 : j = 1,\ldots,n_p\}$ 表示 $n_p$ 个口袋原子的 3D 坐标，$\mathbf{X}^{(0)} = \{x_i^{(0)} \in \mathbb{R}^3 : i = 1,\ldots,n_l\}$ 表示 $n_l$ 个配体原子的真实（原生）3D 坐标
+		- **变量定义**：
+			- 设 $I \in \{0,1\}^{n_p \times n_l \times d_I}$ 为相互作用张量，其中条目 $I_{j,i,k}$ 表示口袋原子 $j$ 和配体原子 $i$ 是否参与类型 $k$ 的相互作用（具有 $d_I$ 个可能的相互作用通道）
+		- **掩码定义**：
+			- 二进制掩码 $M \in \{0,1\}^{n_l}$
+				$$M_i = \mathbb{I}\{\sum_{j=1}^{n_p}\sum_{k=1}^{d_I} I_{j,i,k} > 0\}, \quad i = 1,\ldots,n_l$$
+				此掩码将配体原子划分为：**固定原子** $\mathcal{I} = \{i : M_i = 1\}$ 和**待生成的自由原子** $\mathcal{F} = \{i : M_i = 0\}$
+		- **两种原子的路径定义**：
+			- 对于原子坐标（同样适用于分类空间中的原子类型），我们定义在时间 $t \in [0,1]$ 上的连续插值，介于先验分布（$t = 0$ 时的各向同性高斯噪声）和数据分布（$t = 1$ 时）之间
+			- 对于自由原子（$i \in \mathcal{F}$）：设 $\mathbf{z}_i$ 为从先验中的样本：$$\mathbf{z}_i \sim \mathcal{N}(0, \sigma^2 \mathbf{I}_3)$$
+				插值为： $$\mathbf{x}_{l,i}(t) = (1-t)\mathbf{z}_i + t\mathbf{x}_{l,i}^{(0)}$$
+				- 解释：自由原子的坐标 $x_{l,i}(t)$ 从一个随机高斯噪声 $z_i$ (在 $t=0$ 时) 平滑地线性插值到它们在真实分子中的最终位置 $x_{l,i}^{(0)}$ (在 $t=1$ 时)。它们是在**运动和变化**的
+			- 对于固定原子（$i \in \mathcal{I}$）：由于这些原子被条件为==**保持不变**==，我们简单地设置 $$\mathbf{x}_{l,i}(t) = \mathbf{x}_{l,i}^{(0)} \quad \text{对于所有} t \in [0,1]$$
+				因此， $$\dot{\mathbf{x}}_{l,i}(t) = 0$$
+				- 解释：这些“锚点”原子的坐标在整个时间流中 ($t$ 从 0 到 1) **始终保持不变**，永远等于它们在最终真实分子中的位置 $x_{l,i}^{(0)}$。它们是**静止**的
+				- $\mathbf{x}_{l,i}$ 表示配体 $l$ 的第 $i$ 个原子坐标
+				- $\dot{f}$ 表示对时间 $t$ 的导数，$\dot{\mathbf{x}}_{l,i}(t)$ 表示配体中第 $i$ 个原子在时间 $t$ 的瞬时速度
+		- 向量场推导：
+			- 训练一个 FLOWR 模型 $F_\theta$，将配体坐标（在时间 $t$）、口袋坐标和时间 $t$ 映射到每个配体原子的 $\mathbb{R}^3$ 中的向量：$$F_\theta : (\mathbf{X}_l(t), \mathbf{X}_p, t) \mapsto \mathbb{R}^{n_l \times 3}$$
+			- 对于自由原子（$i \in \mathcal{F}$）： $$F_\theta\left(\mathbf{x}_{l,i}(t), \mathbf{X}_p, t\right) \approx \dot{\mathbf{x}}_{l,i}(t) = \mathbf{x}_{l,i}^{(0)}$$
+			- 对于固定原子（$i \in \mathcal{I}$）： $$F_\theta\left(\mathbf{x}_{l,i}(t), \mathbf{X}_p, t\right) \approx 0$$
+
+			- 在测试时，给定口袋 $\mathbf{X}_p$ 和已知的原生配体几何 $\mathbf{X}_l^{(0)}$（其固定原子由 $M$ 指示），我们通过求解以下 ODE生成自由原子：$$\frac{d}{dt}\mathbf{x}_{l,i}(t) = F_\theta\left(\mathbf{x}_{l,i}(t), \mathbf{X}_p, t\right)$$
+				初始条件为 $$\mathbf{x}_{l,i}(0) = \begin{cases} \mathbf{z}_i, & i \in \mathcal{F}, \\ \mathbf{x}_{l,i}^{(0)}, & i \in \mathcal{I}, \end{cases} \quad \text{且} \quad \mathbf{z}_i \sim p_{\text{prior}}$$
