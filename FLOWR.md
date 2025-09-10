@@ -54,6 +54,18 @@
 			- 训练一个 FLOWR 模型 $F_\theta$，将配体坐标（在时间 $t$）、口袋坐标和时间 $t$ 映射到每个配体原子的 $\mathbb{R}^3$ 中的向量：$$F_\theta : (\mathbf{X}_l(t), \mathbf{X}_p, t) \mapsto \mathbb{R}^{n_l \times 3}$$
 			- 对于自由原子（$i \in \mathcal{F}$）： $$F_\theta\left(\mathbf{x}_{l,i}(t), \mathbf{X}_p, t\right) \approx \dot{\mathbf{x}}_{l,i}(t) = \mathbf{x}_{l,i}^{(0)}$$
 			- 对于固定原子（$i \in \mathcal{I}$）： $$F_\theta\left(\mathbf{x}_{l,i}(t), \mathbf{X}_p, t\right) \approx 0$$
+			
 
-			- 在测试时，给定口袋 $\mathbf{X}_p$ 和已知的原生配体几何 $\mathbf{X}_l^{(0)}$（其固定原子由 $M$ 指示），我们通过求解以下 ODE生成自由原子：$$\frac{d}{dt}\mathbf{x}_{l,i}(t) = F_\theta\left(\mathbf{x}_{l,i}(t), \mathbf{X}_p, t\right)$$
+		- 在测试时，给定口袋 $\mathbf{X}_p$ 和已知的原生配体几何 $\mathbf{X}_l^{(0)}$（其固定原子由 $M$ 指示），我们通过求解以下 ODE生成自由原子：$$\frac{d}{dt}\mathbf{x}_{l,i}(t) = F_\theta\left(\mathbf{x}_{l,i}(t), \mathbf{X}_p, t\right)$$
 				初始条件为 $$\mathbf{x}_{l,i}(0) = \begin{cases} \mathbf{z}_i, & i \in \mathcal{F}, \\ \mathbf{x}_{l,i}^{(0)}, & i \in \mathcal{I}, \end{cases} \quad \text{且} \quad \mathbf{z}_i \sim p_{\text{prior}}$$
+			- 分类分布
+	- 生成新配体 
+		- 给定一个蛋白质口袋 $\mathcal{P}$ 和可选的期望**相互作用谱** $\Psi$，我们可以通过设置 $l_t \leftarrow l_0$（其中 $l_0 \sim p_{noise}$）并通过遵循学习的向量场将 $l_t$ 推向数据分布来从学习的数据分布中生成样本
+		- 具体来说，对于分子坐标 $\mathbf{x}_t$，我们遵循向量场 $v_t^\theta(\mathbf{x}_t) = \frac{1}{1-t}(\tilde{\mathbf{x}}_1 - \mathbf{x}_t)$，其中 $\tilde{\mathbf{x}}_1$ 是 $\tilde{l}_1 \sim p_\theta^H(l_1|l_t, \mathcal{P}, \mathcal{I})$ 的坐标分量。然后我们使用欧拉求解器以步长 $\Delta t$ 积分向量场，如下所示：$\tilde{\mathbf{x}}_{t+\Delta t} = \mathbf{x}_t + \Delta t , v_t^\theta(\mathbf{x}_t)$
+			- 相互作用谱：描述了一个分子（通常是小分子配体）与另一个分子（通常是蛋白质）之间所有可能相互作用类型的集合或模式
+		- 变量定义：
+			- $p_{1|t}^\theta(l_1 | l_t, \mathcal{P}, \mathcal{I})$：**神经网络模型**。给定当前噪声化的配体 $l_t$（包含坐标 $x_t$ 和原子类型 $a_t$）、蛋白口袋 $\mathcal{P}$ 和相互作用 $\mathcal{I}$，它会**直接预测出最终的、干净的配体 $l_1$ 的概率分布**
+			- $\tilde{l}_1$：从上述分布中采样得到的一个**预测的最终配体**
+			- $\tilde{x}_1$：$\tilde{l}_1$ 中的坐标部分。可以理解为模型认为 $x_t$ **最终应该到达的目标位置**
+			- 欧拉法是最简单的数值积分方法——**欧拉法 (Euler method)**：新位置 = 当前位置 + 步长 × 当前速度
+
