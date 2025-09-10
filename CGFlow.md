@@ -63,11 +63,24 @@
 						- 如果当前时间超过 $t_{gen}^{(i)} + t_{window}$ ，$t_{local}^{(i)} = 1$
 					![[localtime.png]]
 			- 状态流被建模为基于 $t_{local}^{(i)}$ 的线性插值，并结合贯穿整个过程的高斯噪声
-				$$\mathbf{S}_t^{(i)} = \begin{cases} \mathcal{N}\left(t_{local}^{(i)}\mathbf{S}_1^{(i)} + (1 - t_{local}^{(i)})\mathbf{S}_0^{(i)}, \sigma^2\right), & \text{if } t > t_{gen}^{(i)}, \\ \bigl[\ \bigr], & \text{else}. \end{cases} \tag{6}$$
+				$$\mathbf{S}_t^{(i)} = \begin{cases} \mathcal{N}\left(t_{local}^{(i)}\mathbf{S}_1^{(i)} + (1 - t_{local}^{(i)})\mathbf{S}_0^{(i)}, \sigma^2\right), & \text{if } t \gt t_{gen}^{(i)}, \\ \bigl[\ \bigr], & \text{else}. \end{cases} \tag{6}$$
 			- 其中：
 				- $\mathbf{S}_0^{(i)}$ 表示第 $i$ 个组件完全由噪声组成的初始状态
 				- $\mathbf{S}_1^{(i)}$ 表示第 $i$ 个组件的最终真实状态
-				- 连续状态 $\mathbf{S}_t^{(i)}$ 仅在对应的组件 $C_t^{(i)}$ 已被生成时才存在，即当 $t > t_{gen}^{(i)}$ 时
+				- 连续状态 $\mathbf{S}_t^{(i)}$ 仅在对应的组件 $C_t^{(i)}$ 已被生成时才存在，即当 $t \gt t_{gen}^{(i)}$ 时
 			- 状态流使得当相关组件按顺序生成时，能够对连续状态进行插值
 	3. 采样
+		- 两个交错循环 —— 执行离散的构件选择和连续的状态变化
+			- 状态流模型 $p_1^θ|t$ 的的积分
+				- 控制第 $i$ 个组件连续状态的向量场定义为 $\hat{S}_1^{(i)} - S_t^{(i)}$，其中 $\hat{S}_1^{(i)}$ 是由 $p_{1\mid t}^\theta$ 预测的去噪后的理想状态，在这个向量场中前进的速率 $κ^{(i)}$ 由状态 $S^{(i)}$ 插值过程中剩余的时间决定：
+					$$\kappa^{(i)} = \frac{\min(t_{end}^{(i)} - t, \Delta t)}{t_{window}} \tag{7}$$
+					- 其中：
+						- $t_{end}^{(i)}$ ：第 $i$ 个构件应该完成其演化（即 $t_{local} = 1$）的全局时间点
+						- $\Delta t$：ODE 求解器的步长
+						- $t_{window}$：归一化因子。如果一个构件的演化窗口很长，那么它的每一步演化速率 $\kappa^{(i)}$ 就会相应地变小，确保整个过程更加平滑和稳定
+						- 如果 $t \gt t_{end}^{(i)}$，状态 $S_t^{(i)}$ 直接设置为预测的去噪后的理想状态 $\hat{S}_1^{(i)}$，确保连续状态的一致性
+				- 状态值 $S^{(i)}$ 使用欧拉法更新
+					$$S_{t+\Delta t}^{(i)} = S_t^{(i)} + (\hat{S}_1^{(i)} - S_t^{(i)}) \cdot \kappa^{(i)} \Delta t \tag{8}$$
+			- 组合流策略 $π^θ$ 的采样动作
+				- 
 	4. 训练目标
