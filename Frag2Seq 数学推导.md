@@ -42,11 +42,11 @@ $$
 - 罗德里格斯旋转公式（罗德里格斯公式是连接**旋转矩阵**和**轴-角表示**的桥梁）：
 	给定一个单位向量旋转轴 $\mathbf{k}$ 和一个旋转角度 $\theta$，一个任意向量 $\mathbf{v}$ 绕着轴 $\mathbf{k}$ 旋转 $\theta$ 角度后得到的新向量 $\mathbf{v}_{\text{rot}}$ 可以通过以下公式计算$$\mathbf{v}_{\text{rot}} = \mathbf{v} \cos\theta + (\mathbf{k} \times \mathbf{v}) \sin\theta + \mathbf{k}(\mathbf{k} \cdot \mathbf{v})(1 - \cos\theta)$$
 	其中：
-		*   $\mathbf{v} \in \mathbb{R}^3$: 需要被旋转的原始向量
-		*   $\mathbf{k} \in \mathbb{R}^3$: 定义旋转轴的**单位向量** (即 $\|\mathbf{k}\|_2 = 1$)
-		*   $\theta$ : 旋转的角度（弧度制）
-		*   $\times$: 向量的叉乘 (Cross Product)
-		*   $\cdot$ : 向量的点乘 (Dot Product)
+	* $\mathbf{v} \in \mathbb{R}^3$: 需要被旋转的原始向量
+	* $\mathbf{k} \in \mathbb{R}^3$: 定义旋转轴的**单位向量** (即 $\|\mathbf{k}\|_2 = 1$)
+	*  $\theta$ : 旋转的角度（弧度制）
+	* $\times$: 向量的叉乘 (Cross Product)
+	* $\cdot$ : 向量的点乘 (Dot Product)
 	罗德里格斯公式可以被写成矩阵形式 $\mathbf{v}_{\text{rot}} = R \mathbf{v}$，其中旋转矩阵 $R$ 可以表示为：$$R = I + (\sin\theta)K_{\mathbf{k}} + (1-\cos\theta)K_{\mathbf{k}}^2 \tag{26}$$
 	
 	其中 $I$ 是单位矩阵，$K_{\mathbf{k}}$ 是由旋转轴 $\mathbf{k}=(k_x, k_y, k_z)$ 构成的**斜对称矩阵 (skew-symmetric matrix)**：$$K = \begin{bmatrix} 0 & -k_z & k_y \\ k_z & 0 & -k_x \\ -k_y & k_x & 0 \end{bmatrix} \tag{25}$$
@@ -68,7 +68,7 @@ $$
 		得到 $\text{tr}(K^2)$：$$\text{tr}(K^2) = (-k_z^2 - k_y^2) + (-k_z^2 - k_x^2) + (-k_y^2 - k_x^2)$$$$\text{tr}(K^2) = -2(k_x^2 + k_y^2 + k_z^2)$$**核心关键点**: 因为 $\mathbf{k}$ 是一个**单位向量**，所以它的模长平方为1：$$\|\mathbf{k}\|^2 = k_x^2 + k_y^2 + k_z^2 = 1$$代入得到：$$\text{tr}(K^2) = -2(1) = -2$$
 	4. 组合所有结果
 		将计算出的三个值代入：$$\text{tr}(R) = \text{tr}(I) + (\sin\theta)\text{tr}(K) + (1-\cos\theta)\text{tr}(K^2)$$$$\text{tr}(R) = 3 + (\sin\theta)(0) + (1-\cos\theta)(-2)$$$$\text{tr}(R) = 3 + 0 - 2(1-\cos\theta)$$$$\text{tr}(R) = 3 - 2 + 2\cos\theta$$$$\text{tr}(R) = 1 + 2\cos\theta$$
-**3. 推导旋转轴 $\mathbf{a}$ (公式 11-13)**
+**3. 推导旋转轴 $\mathbf{a}$ (公式 11-13)** ^e34641
 *   **理论基础**: 旋转矩阵 $R$ 与其旋转轴 $\mathbf{a}$ 构成的斜对称矩阵 $K_{\mathbf{a}}$ 之间存在关系：$$R - R^T = 2\sin(\psi) K_{\mathbf{a}}$$其中，$R^T$ 是 $R$ 的转置矩阵，$K_{\mathbf{a}}$ 定义为：$$K_{\mathbf{a}} = \begin{bmatrix} 0 & -a_z & a_y \\ a_z & 0 & -a_x \\ -a_y & a_x & 0 \end{bmatrix}$$
 *   **推导**:
     1.  计算 $R - R^T$：$$R - R^T = \begin{bmatrix} 0 & r_{12}-r_{21} & r_{13}-r_{31} \\ r_{21}-r_{12} & 0 & r_{23}-r_{32} \\ r_{31}-r_{13} & r_{32}-r_{23} & 0 \end{bmatrix}$$
