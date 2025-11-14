@@ -106,4 +106,26 @@
 				$$\mathbb{Q} = \mathbb{E}_{x_1 \sim p_{\text{data}}} [\mathbb{Q}(\cdot|x_1)] \tag{8}$$
 				- 类似于训练阶段，但是不用包含特定的分子
 	3. 神经网络的参数化
-	4. 
+		<div style="text-align: center;"> <img src="denosingmodule.png" width="500"> </div>
+
+		1. 片段袋嵌入（Fragment Embedder）
+			- 由上面步骤构建的片段袋 $\mathcal{B}$，$\mathcal{B}$ 由一个 MPNN 会**逐一处理**袋中的每一个片段。它将每个片段的化学结构（一个小的原子图）转换成一个高维向量
+			$$h_i = \text{FragmentEncoder}(x_i; \phi), \quad \text{for } x_i \in \mathcal{F} \tag{9}$$
+			- 这个公式定义了如何将一个化学片段（一个小的原子图 $x_i$）转换成一个数学向量 $h_i$。$\text{FragmentEncoder}$ 是一个消息传递神经网络（MPNN），它在片段的原子图上运行，最终聚合信息得到一个代表整个片段的向量。参数 $\phi$ 是可学习的
+		2. 片段级图表示和上下文信息提取
+			- 从一个带噪声的片段图 $\mathcal{G}_t$开始，图中的每个节点都需要一个初始的特征向量，从第一步的片段袋中找
+			- 再通过一个图 Transformer 得到一个**富含上下文的新的节点嵌入（Node Embedding）**
+		3. 做出预测
+			- Node Embedding 和 初始的 Fragment Embedder 做内积算相似度，经 softmax 被转换成一个概率分布，得到最终的**干净片段**的预测
+			$$\hat{p}_i = \text{Softmax}\left( \{h_i^{(l)} \cdot h_k^{(0)} \}_{k \in \mathcal{B}}\right) \tag{10}$$
+			- **变量定义**：
+			    * $\hat{p}_i$：模型对第 $i$ 个节点的**最终预测**。这是一个概率分布向量，其维度等于片段袋 $\mathcal{B}$ 的大小。向量的第 $k$ 个元素表示第 $i$ 个节点是片段 $x_k$ 的概率
+			    * $h_i^{(l)}$：这是第 $i$ 个节点的**最终嵌入向量**。上标 `(l)` 至关重要，它代表这个向量是**经过了 $l$ 层图Transformer处理之后**的结果。因此，$h_i^{(l)}$ 是一个**富含上下文信息 (context-aware)** 的表示。它不仅知道自己最初是什么，更重要的是，它“理解”了自己在整个图结构中的角色
+			    * $h_k^{(0)}$：这是片段袋 $\mathcal{B}$ 中第 $k$ 个候选片段 $x_k$ 的**初始嵌入向量**。上标 `(0)` 同样至关重要，它代表这是由 `Fragment Embedder` 直接产生的、**未经任何图Transformer处理**的向量。因此，$h_k^{(0)}$ 是一个**上下文无关 (context-free)** 的表示，可以被看作是片段 $x_k$ 纯粹的**“身份ID”或“数学指纹”**
+			    * $h_i^{(l)} \cdot h_k^{(0)}$：计算这两个向量的**点积 (dot product)**。点积是衡量两个向量相似度的常用方法。
+			    * $\{ \cdot \}_{x_k \in \mathcal{B}}$：这个花括号表示，点积操作要对片段袋 $\mathcal{B}$ 中的**每一个**候选片段 $x_k$ 都执行一次。最终会得到一个与袋大小相同的分数列表（logits）
+		4. CTMC 驱动流匹配
+			- 由第三步的**干净片段**得到**理论转移速率矩阵** $R_t^*$，然后经 CTMC 从 $t=0$ 到 $t=1$ 进行完整的去噪流程
+	4. 从片段图进行原子级别图重构
+	5. 采样技巧
+	6. 无分类器引导
