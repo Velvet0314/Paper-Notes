@@ -54,3 +54,56 @@
 			    * 系统有 $1 - \sum_{y \neq x_t} R_t(x_t, y|\mathcal{B})dt$ 的概率保持在原状态 $x_t$ 不变（对应 $\delta^\mathcal{B}(x_t, y)$ 项）
 			    * 系统有 $R_t(x_t, y|\mathcal{B})dt$ 的概率从状态 $x_t$ 跳转到另一个状态 $y$
 2. Method 细节
+	1. 粗-细粒度自编码器细节
+		- 编码与解码过程的形式化定义
+			$$\begin{align*}\mathcal{G} &= \text{Fragmentation}(G) \\z &\sim q_{\theta}(z|G) = \mathcal{N}(\text{Encoder}(G; \theta), \sigma) \tag{4} \\ \hat{E} &= \text{Decoder}(\mathcal{G}, z; \theta)\end{align*}$$
+			* **变量定义**：
+			    * $G, \mathcal{G}$：分别是原子级图和片段级图
+			    * $z$：连续隐变量
+			    * $q_{\theta}(z|G)$：编码器（Encoder）定义的后验分布，用于从 $G$ 推断 $z$。它被建模为一个均值由神经网络 $\text{Encoder}(G; \theta)$ 预测、方差 $\sigma$ 通常固定的高斯分布
+			    * $\hat{E}$：解码器（Decoder）重构出的跨片段原子键的集合（或其概率）
+			* **解释:**
+			    1. **分解 (Fragmentation)**：将输入的原子图 $G$ 按照预设规则（如BRICS）分解为粗糙的片段图 $\mathcal{G}$。这是一个确定性的、无学习参数的过程
+			    2. **编码 (Encoding)**：一个参数为 $\theta$ 的神经网络（Encoder）读取整个原子图 $G$，并**输出一个高斯分布的参数**（主要是均值）。然后我们从这个分布中采样一个隐变量 $z$。这个 $z$ 捕获了分解过程中丢失的精细连接信息
+			    3. **解码 (Decoding)**：另一个神经网络（Decoder）接收粗糙图 $\mathcal{G}$ 和隐变量 $z$ 作为输入，它的任务是**预测**那些连接不同片段的原子之间应该存在哪些化学键，即输出 $\hat{E}$（==仅重建与粗粒度表示中碎片连通性对应的那些原子级别边 $\hat{E}$==）
+		- 自编码器的损失函数 (VAE Loss)
+			$$\mathcal{L}_{\text{VAE}}(\theta) = \mathbb{E}_{G \sim p_{\text{data}}} \left[ \mathcal{L}_{\text{CE}}(E, \hat{E}(\theta)) + \beta D_{\text{KL}}(q_{\theta}(z|G) || p(z)) \right] \tag{5}$$
+
+			* **变量定义**：
+			    * $\mathcal{L}_{\text{CE}}$：**交叉熵损失 (Cross-Entropy Loss)**，也称为重构损失
+			    * $D_{\text{KL}}$：**KL散度 (Kullback-Leibler Divergence)**，也称为正则化项
+			    * $p(z)$：隐变量 $z$ 的先验分布，通常设为标准正态分布 $\mathcal{N}(0, I)$
+			    * $\beta$：一个超参数，用于平衡重构损失和KL散度项的权重
+			- **解释**：
+				 1. **重构项 $\mathcal{L}_{\text{CE}}(E, \hat{E}(\theta))$**：这部分的目标是让解码器**尽可能完美地重构出原始的分子**。它度量了预测的键连接 $\hat{E}$ 与真实的键连接 $E$ 之间的差异。如果解码器完美重构，这个损失为 0
+				 2. **正则化项 $\beta D_{\text{KL}}(...)$**：它的目标是让编码器产生的后验分布 $q_{\theta}(z|G)$ **尽可能地接近**一个简单的、预设的先验分布 $p(z)$ —— 防止学到一个非常复杂、支离破碎的隐空间，每个分子都对应一个孤立的点，无法采样
+	2. 片段上的去噪流匹配
+		- 定义转移速率矩阵
+			$$R_t^*(x_t, y | x_1, \mathcal{B}) = \frac{\text{ReLU}\left[ \partial_t p_{t|1}(y|x_1, \mathcal{B}) - \partial_t p_{t|1}(x_t|x_1, \mathcal{B}) \right]}{Z_t^{>0} p_{t|1}(x_t|x_1, \mathcal{B})} \quad \text{for } x_t \neq y \tag{6}$$
+			* **变量定义**：
+			    * $R_t^*(x_t, y | x_1, \mathcal{B})$：从当前噪声状态 $x_t$ 跳转到另一个状态 $y$ 的**目标转移速率**。星号 `*` 代表这是我们希望模型学习的“标准”
+			    * $p_{t|1}(...)$：我们在公式(2)中定义的**预设概率路径**。这是连接噪声和数据的“轨道”
+			    * $\partial_t p_{t|1}(...)$：**$p_{t|1}$ 对时间 $t$ 的偏导数**
+				    * 代入公式(2)，计算得：
+					    - $\partial_t p_{t|1}(x_t | x_1, \mathcal{B}) = \frac{\partial}{\partial t} \left[ t\delta_{\mathcal{B}}(x_t, x_1) + (1-t)p_0(x_t|\mathcal{B}) \right] =  \delta_{\mathcal{B}}(x_t, x_1) - p_0(x_t|\mathcal{B})$
+			    * $Z_t^{>0}$：一个归一化常数
+			- **解释**：
+				- 偏导数项的意义：在时间 $t$，概率在 $x_t$ 这个点的**“瞬时流速”或“变化速率”**。
+				    1. 如果 $x_t$ 是**目标数据** ($x_t = x_1$)，那么 $\delta_{\mathcal{B}}(x_t, x_1)=1$。流速为 $1 - p_0(x_1|\mathcal{B})$，这是一个**正值**（因为 $p_0$ 是概率，小于1）。这意味着随着时间推移，概率正在**流入**并**汇集**到目标数据点上
+				    2. 如果 $x_t$ 是**任何其他点** ($x_t \neq x_1$)，那么 $\delta_{\mathcal{B}}(x_t, x_1)=0$。流速为 $-p_0(x_t|\mathcal{B})$，这是一个**负值**。这意味着随着时间推移，概率正在从这些非目标点**流出**
+		- 离散时间步的采样近似
+			$$\tilde{p}_{t+\Delta t | t}(x_{t+\Delta t}^{1:D} | x_t^{1:D}, x_1^{1:D}, \mathcal{B}) = \prod_{d=1}^D  \left(\delta^{\mathcal{B}}(x_t^{(d)}, x_{t+\Delta t}^{(d)}) + \mathbb{E}_{p_{t|1}^{(d)}(x_1^{(d)}|x_1^{1:D}, \mathcal{B})} \left[ R_t^{(d)}(x_t^{(d)}, x_{t+\Delta t}^{(d)}) | x_1^{(d)}, \mathcal{B}) \Delta t \right]\right) \tag{7}$$
+			* **解释**：
+			    - 这是一个**欧拉法 (Euler method)** 的应用。CTMC的演化是一个微分方程，难以精确求解。因此，我们把它离散化成许多小的时间步 $\Delta t$。即在一个很小的时间段 $\Delta t$ 内：
+				    * 一个片段有很大的概率保持不变（$\delta_{\mathcal{B}}$ 项）
+				    * 有 $R_t(...) \Delta t$ 的小概率从当前状态 $x_t^{(d)}$ 跳转到另一个状态 $y^{(d)}$
+				    * 连乘符号 $\prod_{d=1}^D$ 表明，在做这个近似时，我们**假设分子中的 $D$ 个片段是独立演化的**。这是一种简化，但在小时间步下是合理的
+		- 片段袋 $\mathcal{B}$ 的构建 —— **蒙特卡洛近似**
+			- **训练阶段**：构建片段袋是很容易的，因为我们有一个明确的目标分子 $x_1$。我们可以围绕这个 $x_1$ 来构建一个量身定制的袋子，这个过程我们记为从条件分布 $\mathbb{Q}(\cdot|x_1)$ 中采样
+				1. 从数据分布中选择固定数量的分子，并将目标分子 $x_1$ 包含在其中
+				2. 这些分子中的所有片段以形成片段袋 $\mathcal{B}$
+			- **采样阶段**：最终要生成的分子 $x_1$ 非先验可用，所以不能以任何特定的 $x_1$ 为条件，必须构建一个**无条件的 (unconditional)**、具有普适性的片段袋，定义该无条件分布 $\mathbb{Q}$：
+				$$\mathbb{Q} = \mathbb{E}_{x_1 \sim p_{\text{data}}} [\mathbb{Q}(\cdot|x_1)] \tag{8}$$
+				- 类似于训练阶段，但是不用包含特定的分子
+	3. 神经网络的参数化
+	4. 
