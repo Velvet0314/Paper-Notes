@@ -176,7 +176,7 @@
 					[False, False, False]
 				]
 				```
-			1. 填充无边 padding 为预留的 $\text{one-hot}$ `[1,0,...,0]`
+			3. 填充无边 padding 为预留的 $\text{one-hot}$ `[1,0,...,0]`
 				- 作用：将无边也能用 $\text{one-hot}$ 表示
 				```python
 				first_elt = E[:, :, :, 0] # 取最后一个维度的第一个元素
@@ -186,7 +186,7 @@
 				first_elt[no_edge] = 1    # 把所有的无边的第一个元素置为 1
 				E[:, :, :, 0] = first_elt # 显式写回 E
 				```
-			2. 修正对角线的问题
+			4. 修正对角线的问题
 				- 作用：因为转成稠密矩阵的时候没有自环，所以对角线默认也是无边的 padding 是相同的，但是第 3 步操作将对角线也标记成无边的 $\text{one-hot}$ `[1,0,...,0]`了，所以需要修正回来
 				```python
 				diag = (
@@ -218,6 +218,95 @@
 				# 思考：node_mask.sum(dim=1).unsqueeze(1) 其实应为 [[2, 3, 2]]
 				n = noisy_data["node_mask"].sum(dim=1).unsqueeze(1) / self.max_n_nodes # 除以最大节点数，归一化到 [0, 1]
 				```
-			2. 计算 k-循环特征
+			2. 计算 k-循环特征 —— 加入到图的全局特征 `y` 中
 			3. 计算选定的特征类型 —— 标准 RRWP
+				- RRWP 详解
+					1. RRWP 的概念：Random Walk with Restart Positional Encoding（随机游走位置编码）
+						- 每一步，从当前节点随机选择一条边走到邻居节点
+						- RRWP 计算的是：从节点 $i$ 出发，走 $k$ 步后到达节点 $j$ 的概率
+					2. 数学原理
+						- 概率转移矩阵
+							$$P = D^{-1} A$$
+							其中：
+							- $A$：邻接矩阵（$A[i, j] = 1$ 表示 $i$ 和 $j$ 之间有边）
+							- $D$：度矩阵（对角矩阵，$D[i, i]=$ 节点 $i$ 的度数）
+							- $P$：概率转移矩阵（$P[i ,j] =$ 从 $i$ 一步走到 $j$ 的概率）
+						- $k$ 步随机游走
+							- $P^k[i,j] = \text{从节点 i 出发，恰好走 k 步到达节点 j 的概率}$
+					3. 代码解析
+						1. 排除无边类别 —— rrwp 只关心有没有边，所以可以不用最后一维
+							```python
+							# 排除最后一维的第 0 个元素，之前编码的无边类型就失效了
+							# 再对最后一个维度求和，只有单一的 0/1 代表有无边
+							E = noisy_data["E_t"].float()[..., 1:].sum(-1)
+							# E.shape:[batch_size, n ,n]
+							```
+						2. 计算随机游走核特征：由 `extra_features.py —— RRWPFeatures()` 实现
+							```python
+							rrwp_edge_attr = self.RRWP(E, k=self.rrwp_steps)
+							self.RRWP = RRWPFeatures()
+							
+							class RRWPFeatures:
+								def __call__(self, E, k=None):
+									k = k or self.k
+									bs, n, _ = E.shape
+									# 如果需要归一化，计算转移矩阵 D^{-1}A
+									if self.normalize:
+										# 初始化度矩阵
+										degree = torch.zeros(bs, n, n, device=E.device)
+										
+										# 计算出度（每个节点的度数）
+										# 对于无向图：出度 = 入度 = 度数
+										# 由于 D 是对角矩阵，所以 D 的逆矩阵 D^{-1} 就是对角线元素取倒 
+										to_fill = 1 / (E.sum(dim=-1).float())
+										
+										# 孤立节点度数为 0，1/0 = inf
+										# 找到原本为 0 的地方，全部将 inf 替换为 0
+										to_fill[E.sum(dim=-1).float() == 0] = 0
+										# to_fill.shape:[非孤立节点数, 1]
+										
+										# 构造对角度矩阵
+										# degree 是三维向量，写回到第2、3维度里
+										degree = torch.diagonal_scatter(degree, to_fill, dim1=1, dim2=2)
+										
+										# 转移矩阵 = D^{-1} @ A
+										E = degree @ E
+							```
+						3. 开始游走，迭代计算
+							```python
+							# 初始化：第 0 步即是单位矩阵 I
+							# [n, n] 单位矩阵，unsqueeze(0) 增加 batch 维度到 [1, n, n]，repeat(bs, 1, 1) 复制 bs 份 [bs, n, n] 
+							id = torch.eye(n, device=E.device).unsqueeze(0).repeat(bs, 1, 1)
+							# 列表用来存储所有步数的矩阵，目前只有 P^0
+							rrwp_list = [id]
+							
+							# 迭代计算 P^1, P^2, ..., P^{k-1}
+							for i in range(k - 1):
+								cur_rrwp = rrwp_list[-1] @ E  #  P^{i+1} = P^i @ E
+								rrwp_list.append(cur_rrwp)
+							
+							# 堆栈成 [bs, n, n, k]
+							return torch.stack(rrwp_list, -1)
+							```
+						4. 提取节点特征
+							```python
+							# 从对角线上提取节点特征（A^k[i,i] 对角元素）
+							# 生成对角线索引
+							diag_index = torch.arange(rrwp_edge_attr.shape[1])
+							
+							# 对于 diag_index = [0, 1, 2]
+							# rrwp_edge_attr[:, [0,1,2], [0,1,2], :]
+							# 展开就是：
+							# rrwp_edge_attr[:, 0, 0, :]  → 节点0的对角特征
+							# rrwp_edge_attr[:, 1, 1, :]  → 节点1的对角特征
+							# rrwp_edge_attr[:, 2, 2, :]  → 节点2的对角特征
+							# 由于取 n 个对角线元素，维度减少了一个
+							rrwp_node_attr = rrwp_edge_attr[:, diag_index, diag_index, :]  # (bs, n, k)
+							```
+					4. 总结
+						- `rrwp_edge_attr` 告诉模型：节点 $i$ 和节点 $j$ 之间的"图上距离"是多少，它们通过多少步可以互相到达，以及它们之间有多少条路径连接
+						- `rrwp_node_attr` 告诉模型：这个节点在图中处于什么样的"位置"—— 是在**密集的中心（高返回概率，因为邻居多容易走回来）**，还是在**稀疏的边缘（低返回概率，不易走回来）**，以及它周围的局部连接模式是什么样的
 		4. 分子的特征
+			1. 1
+			2. 2
+			3. 3
