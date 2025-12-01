@@ -464,3 +464,30 @@
 	1. 训练指标计算器
 	2. 采样评估计算器
 	3. 可视化工具
+7. 初始化流模型
+	- 一些构造函数中需要注意的
+		1. 节点数量的概率分布：`self.node_dist = dataset_infos.nodes_dist`
+			- `node_dist` 是数据集中节点数量的概率分布对象，用于在采样生成新图时随机确定节点数
+		2. 噪声和极限分布：`self.noise_dist = NoiseDistribution(cfg.model.transition, dataset_infos)`
+			- `noise_dist` 定义了离散流匹配模型中的噪声分布和极限分布，用于训练和采样过程中的随机转换
+		3. 极限分布：`self.limit_dist = self.noise_dist.get_limit_dist()`
+			- `limit_dist` 是离散流匹配中的极限分布，定义了在时间 $t \rightarrow \infty$ 时各类别的概率分布，用于指导噪声采样和概率计算`
+		4. 吸收态
+			- 连续：加噪过程数据逐渐变得越来越随机，最终会变成 **完全的各向同性高斯噪声** $\mathcal{N}(0, I)$，这个稳定的终点就是吸收态（一旦数据到达这个状态，再继续扩散也不会改变分布）
+			- 离散：需要一个离散状态的终点来代替高斯分布，也就是对输入的 `x, e` 的 $\text{ont-hot}$ 添加了一个新的维度 $[ \underbrace{0,\ 0,\ \cdots,\ 0}_{\text{前}\ n\ \text{维}},\  \underset{\mathclap{\substack{\uparrow \\ \text{吸收态}}}}{1} ]$ 用来标记终点
+		5. 训练损失函数：`self.train_loss = TrainLossDiscrete(self.cfg.model.lambda_train)`
+		6. 图 Transformer：`self.model = GraphTransformer(...)`
+			- `mlp_in_*`：**维度适配** —— 原始特征 → 隐层维度
+			- `tf_layers`：**特征学习** —— 通过多层 Transformer 学习复杂关系
+			- `mlp_out_*`：**维度恢复** —— 隐层 → 输出维度
+		7. 时间变形器（Time Distorter）：用于在训练和采样时改变时间步的分布方式
+			- 通过不同的时间变形函数将均匀分布的时间步 $t \in [0,1]$ 转换成不同的分布
+				- `identity`：不变 ——  $f(t) = t$           
+				- `cos`：余弦变形 —— $f(t) = (1 - cos(\pi t))/2$ 
+				- `revcos`：反余弦 —— $f(t) = 2t - (1 - cos(\pi t))/2$
+				- `polyinc`：二次递增 —— $f(t) = t^2$
+				- `polydec`：二次递减 —— $f(t) = 2t - t^2$
+		8. 速率矩阵设计器（Rate Matrix Designer）：用于计算离散流匹配中的**转移速率矩阵**
+			- 受到 `eta`（随机性）和 `omega`（引导强度）的控制（创新点）
+8. 初始化 Pytorch Lightning 的 `Trainer()`
+9. 开始训练 `trainer.fit(model, datamodule=datamodule, ckpt_path=cfg.general.resume)`
