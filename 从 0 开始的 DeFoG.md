@@ -353,6 +353,7 @@
 					# 对每条边取最大键级，然后对每个原子的所有邻接边求和，得到当前价态
 					⚠ 这里似乎有错误，计算总键级的时候芳香键应是为 1.5，但 argmax 是返回索引 4
 					💡修正：current_valencies = weighted_E.sum(dim=-1).sum(dim=-1)
+					⭐定论：argmax 能区别不同类型就可以，不用修改
 					# 然后对每个原子的邻居求和，得到每个原子当前的价态
 					# 原子的当前价态（current valency）就是该原子连接的所有键的键级之和
 					current_valencies = weighted_E.argmax(dim=-1).sum(dim=-1)  # (bs, n)
@@ -367,6 +368,7 @@
 					X = noisy_data["X_t"] * valencies  # (bs, n, dx)
 					⚠ 相同的错误，如果 valencies 刚好是递减的，那么是可以正常运行的
 					💡修正：normal_valencies = torch.sum(X, dim=-1)
+					⭐定论：argmax 能区别不同类型就可以，不用修改
 					normal_valencies = torch.argmax(X, dim=-1)  # (bs, n)
 					
 					# 形式电荷 = 正常价态 - 当前价态
@@ -399,6 +401,7 @@
 						⚠ 相同的错误
 						# 对每条边取最大键级，然后对每个原子的所有邻接边求和
 						💡修正：valencies = E.sum(dim=-1).sum(dim=-1)
+						⭐定论：argmax 能区别不同类型就可以，不用修改
 						valencies = E.argmax(dim=-1).sum(dim=-1)  # (bs, n)
 				
 						return valencies.type_as(noisy_data["X_t"])
@@ -471,10 +474,15 @@
 		2. 噪声和极限分布：`self.noise_dist = NoiseDistribution(cfg.model.transition, dataset_infos)`
 			- `noise_dist` 定义了离散流匹配模型中的噪声分布和极限分布，用于训练和采样过程中的随机转换
 		3. 极限分布：`self.limit_dist = self.noise_dist.get_limit_dist()`
-			- `limit_dist` 是离散流匹配中的极限分布，定义了在时间 $t \rightarrow \infty$ 时各类别的概率分布，用于指导噪声采样和概率计算`
-		4. 吸收态
-			- 连续：加噪过程数据逐渐变得越来越随机，最终会变成 **完全的各向同性高斯噪声** $\mathcal{N}(0, I)$，这个稳定的终点就是吸收态（一旦数据到达这个状态，再继续扩散也不会改变分布）
-			- 离散：需要一个离散状态的终点来代替高斯分布，也就是对输入的 `x, e` 的 $\text{ont-hot}$ 添加了一个新的维度 $[ \underbrace{0,\ 0,\ \cdots,\ 0}_{\text{前}\ n\ \text{维}},\  \underset{\mathclap{\substack{\uparrow \\ \text{吸收态}}}}{1} ]$ 用来标记终点
+			- `limit_dist` 是离散流匹配中的极限分布，定义了在时间 $t \rightarrow \infty$ 时各类别的概率分布，用于指导噪声采样和概率计算
+		4. 转移机制：也就是定义模型最终的噪声分布
+			1. 均匀分布 `uniform`：每个类别概率相同
+			2. 第一类吸收态 `absorbfirst`：100% 转为第0类
+			3. 最常见的类别 `argmax`：目标主要是最频繁的类别
+			4. 虚拟吸收态 `absorbing`：
+				- 连续：加噪过程数据逐渐变得越来越随机，最终会变成 **完全的各向同性高斯噪声** $\mathcal{N}(0, I)$，这个稳定的终点就是吸收态（一旦数据到达这个状态，再继续扩散也不会改变分布）
+				- 离散：需要一个离散状态的终点来代替高斯分布，也就是对输入的 `x, e` 的 $\text{ont-hot}$ 添加了一个新的维度 $[ \underbrace{0,\ 0,\ \cdots,\ 0}_{\text{前}\ n\ \text{维}},\  \underset{\mathclap{\substack{\uparrow \\ \text{吸收态}}}}{1} ]$ 用来标记终点
+			5. 真实分布 `marginal`：数据集中的真实分布
 		5. 训练损失函数：`self.train_loss = TrainLossDiscrete(self.cfg.model.lambda_train)`
 		6. 图 Transformer：`self.model = GraphTransformer(...)`
 			- `mlp_in_*`：**维度适配** —— 原始特征 → 隐层维度
