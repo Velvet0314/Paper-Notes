@@ -74,7 +74,7 @@
 			         ↑  ↑  ↑  ↑  ↑  ↑  ↑
 					图0    图1      图2
 			```
-	- 稀疏图转稠密图
+	- 稀疏图转稠密图 ^todense
 		1. 节点特征矩阵转稠密矩阵 —— 调用 PyG 的函数 `to_dense_batch()`
 			- 返回稠密图和一个 `node_mask`，`node_mask` 表示每个图哪些节点是真实的（因为要 padding 到 `max_num_nodes`，需要一个 mask 无效掉 padding 的部分）
 			- 例子：
@@ -101,7 +101,7 @@
 			node_mask = [[True,  True,  False],   # 图0: 前2个是真实节点
 						 [True,  True,  True ],   # 图1: 全是真实节点
 						 [True,  True,  False]]   # 图2: 前2个是真实节点
-			# node_mask.shape:[3, 3]
+			# node_mask.shape:[3, 3] → [batch_size, max_nodes]
 			```
 		2. 去掉边索引和边特征（`edge_index, edge_attr`）矩阵中的自环 —— 调用 PyG `torch_geometric.utils.remove_self_loops()`
 		3. 边列表转邻接矩阵 —— 调用 PyG `to_dense_adj()`
