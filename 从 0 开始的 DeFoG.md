@@ -224,7 +224,7 @@
 				n = noisy_data["node_mask"].sum(dim=1).unsqueeze(1) / self.max_n_nodes # 除以最大节点数，归一化到 [0, 1]
 				```
 			2. 计算 k-循环特征 —— 加入到图的全局特征 `y` 中
-			3. 计算选定的特征类型 —— 标准 RRWP
+			3. 计算选定的特征类型 —— 标准 RRWP ^extragraphfeatures
 				- RRWP 详解
 					1. RRWP 的概念：Random Walk with Restart Positional Encoding（随机游走位置编码）
 						- 每一步，从当前节点随机选择一条边走到邻居节点
@@ -311,13 +311,13 @@
 					4. 总结
 						- `rrwp_edge_attr` 告诉模型：节点 $i$ 和节点 $j$ 之间的"图上距离"是多少，它们通过多少步可以互相到达，以及它们之间有多少条路径连接
 						- `rrwp_node_attr` 告诉模型：这个节点在图中处于什么样的"位置"—— 是在**密集的中心（高返回概率，因为邻居多容易走回来）**，还是在**稀疏的边缘（低返回概率，不易走回来）**，以及它周围的局部连接模式是什么样的
-		4. 分子的特征 —— `class ExtraMolecularFeatures: __call__ function`
+		4. 分子的特征 —— `class ExtraMolecularFeatures: __call__ function`  
 			- 输入：noisy_data 包含噪声数据的字典（稠密图）
 			- 输出：一个 PlaceHolder，包含分子的特征，具有 X、E、y 三个属性
 				- X：每个原子的 电荷，价态
 				- E：空的边特征
 				- y：归一化分子量
-			1. 计算形式电荷
+			1. 计算形式电荷 ^extramolfeatures
 				- 键级：一条化学键的强度
 				- 原子当前价态 = 该原子的总键级
 				```python
