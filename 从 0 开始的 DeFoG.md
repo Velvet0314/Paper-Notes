@@ -471,18 +471,117 @@
 	- 一些构造函数中需要注意的
 		1. 节点数量的概率分布：`self.node_dist = dataset_infos.nodes_dist`
 			- `node_dist` 是数据集中节点数量的概率分布对象，用于在采样生成新图时随机确定节点数
-		2. 噪声和极限分布：`self.noise_dist = NoiseDistribution(cfg.model.transition, dataset_infos)`
-			- `noise_dist` 定义了离散流匹配模型中的噪声分布和极限分布，用于训练和采样过程中的随机转换
+		2. 噪声分布：`self.noise_dist = NoiseDistribution(cfg.model.transition, dataset_infos)`
+			- `noise_dist` 定义了离散流匹配模型中的噪声分布，用于训练和采样过程中的随机转移
+			- 不同的转移模式会初始化不同的噪声分布
+				```python
+				class NoiseDistribution:
+					def __init__(self, model_transition, dataset_infos):
+						# 经过输入/输出维度计算的 dataset_infos
+						self.x_num_classes = dataset_infos.output_dims["X"]
+						self.e_num_classes = dataset_infos.output_dims["E"]
+						self.y_num_classes = dataset_infos.output_dims["y"]
+						self.x_added_classes = 0
+						self.e_added_classes = 0
+						self.y_added_classes = 0
+						# 不同的转移模式
+						self.transition = model_transition
+						...(见转移模式)
+						# 标签属性的分布
+						y_limit = torch.ones(self.y_num_classes) / self.y_num_classes  # typically dummy
+						
+						print(
+							f"Limit distribution of the classes | Nodes: {x_limit} | Edges: {e_limit}"
+						)
+						
+						self.limit_dist = utils.PlaceHolder(X=x_limit, E=e_limit, y=y_limit)
+				```
 		3. 极限分布：`self.limit_dist = self.noise_dist.get_limit_dist()`
 			- `limit_dist` 是离散流匹配中的极限分布，定义了在时间 $t \rightarrow \infty$ 时各类别的概率分布，用于指导噪声采样和概率计算
-		4. 转移机制：也就是定义模型最终的噪声分布
+			- 在代码中 `noise_dist` 初始化后就会得到 `limit_dist`
+		4. 转移模式：也就是定义模型最终的噪声分布
 			1. 均匀分布 `uniform`：每个类别概率相同
+				```python
+				# 均匀分布：噪声是完全随机的，所有类别等概率
+				if model_transition == "uniform":
+					x_limit = torch.ones(self.x_num_classes) / self.x_num_classes
+					e_limit = torch.ones(self.e_num_classes) / self.e_num_classes
+				```
 			2. 第一类吸收态 `absorbfirst`：100% 转为第0类
+				```python
+				# 第一类吸收态：当 t → 0 时，所有数据都变成第 0 类
+				elif model_transition == "absorbfirst":
+					x_limit = torch.zeros(self.x_num_classes)
+					x_limit[0] = 1
+					
+					e_limit = torch.zeros(self.e_num_classes)
+					e_limit[0] = 1
+				```
 			3. 最常见的类别 `argmax`：目标主要是最频繁的类别
+				```python
+				# argmax：最常见的类别
+				elif model_transition == "argmax":
+					# node_types 是数据集中各种节点类型的频数统计
+					node_types = dataset_infos.node_types.float()
+					# 每种原子类型在数据集中出现的概率
+					x_marginals = node_types / torch.sum(node_types)
+					
+					# 同 node_types
+					edge_types = dataset_infos.edge_types.float()
+					e_marginals = edge_types / torch.sum(edge_types)
+					
+					x_max_dim = torch.argmax(x_marginals)
+					e_max_dim = torch.argmax(e_marginals)
+					x_limit = torch.zeros(self.x_num_classes)
+					x_limit[x_max_dim] = 1
+					e_limit = torch.zeros(self.e_num_classes)
+					e_limit[e_max_dim] = 1
+				```
 			4. 虚拟吸收态 `absorbing`：
 				- 连续：加噪过程数据逐渐变得越来越随机，最终会变成 **完全的各向同性高斯噪声** $\mathcal{N}(0, I)$，这个稳定的终点就是吸收态（一旦数据到达这个状态，再继续扩散也不会改变分布）
 				- 离散：需要一个离散状态的终点来代替高斯分布，也就是对输入的 `x, e` 的 $\text{ont-hot}$ 添加了一个新的维度 $[ \underbrace{0,\ 0,\ \cdots,\ 0}_{\text{前}\ n\ \text{维}},\  \underset{\mathclap{\substack{\uparrow \\ \text{吸收态}}}}{1} ]$ 用来标记终点
-			5. 真实分布 `marginal`：数据集中的真实分布
+				```python
+				# 虚拟吸收态
+				elif model_transition == "absorbing":
+					# only add virtual classes when there are several
+					# 只有在类别数量 ＞ 1 时才有效
+					if self.x_num_classes > 1:
+						# if self.x_num_classes >= 1:
+						self.x_num_classes += 1
+						self.x_added_classes = 1
+					if self.e_num_classes > 1:
+						self.e_num_classes += 1
+						self.e_added_classes = 1
+						
+					x_limit = torch.zeros(self.x_num_classes)
+					x_limit[-1] = 1
+					e_limit = torch.zeros(self.e_num_classes)
+					e_limit[-1] = 1
+				```
+			5. ⭐真实分布 `marginal`：数据集中的真实分布
+				```python
+				# 真实分布：数据集中的边缘分布
+				elif model_transition == "marginal":
+					node_types = dataset_infos.node_types.float()
+					x_limit = node_types / torch.sum(node_types)
+					
+					edge_types = dataset_infos.edge_types.float()
+					e_limit = edge_types / torch.sum(edge_types)
+				
+				# 节点均匀分布，边真实
+				elif model_transition == "edge_marginal":
+					x_limit = torch.ones(self.x_num_classes) / self.x_num_classes
+					
+					edge_types = dataset_infos.edge_types.float()
+					e_limit = edge_types / torch.sum(edge_types)
+					
+				# 边均匀分布，节点真实
+				elif model_transition == "node_marginal":
+					e_limit = torch.ones(self.e_num_classes) / self.e_num_classes
+					node_types = dataset_infos.node_types.float()
+					
+					x_limit = node_types / torch.sum(node_types)
+				```
 		5. 训练损失函数：`self.train_loss = TrainLossDiscrete(self.cfg.model.lambda_train)`
 		6. 图 Transformer：`self.model = GraphTransformer(...)`
 			- `mlp_in_*`：**维度适配** —— 原始特征 → 隐层维度
