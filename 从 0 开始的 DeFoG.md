@@ -241,60 +241,60 @@
 					3. 代码解析
 						1. 排除无边类别 —— rrwp 只关心有没有边，所以可以不用最后一维
 							```python
+							# step 1
 							# 排除最后一维的第 0 个元素，之前编码的无边类型就失效了
 							# 再对最后一个维度求和，只有单一的 0/1 代表有无边
 							E = noisy_data["E_t"].float()[..., 1:].sum(-1)
 							# E.shape:[batch_size, n ,n]
 							```
-						2. 计算随机游走核特征：由 `extra_features.py —— RRWPFeatures()` 实现
+						2. 计算随机游走核特征（提取边特征）：由 `extra_features.py —— RRWPFeatures()` 实现
 							```python
+							# step 2
 							rrwp_edge_attr = self.RRWP(E, k=self.rrwp_steps)
 							self.RRWP = RRWPFeatures()
-							
-							class RRWPFeatures:
-								def __call__(self, E, k=None):
-									k = k or self.k
-									bs, n, _ = E.shape
-									# 如果需要归一化，计算转移矩阵 D^{-1}A
-									if self.normalize:
-										# 初始化度矩阵
-										degree = torch.zeros(bs, n, n, device=E.device)
+								# 进入 RRWPFeatures()
+								class RRWPFeatures:
+									def __call__(self, E, k=None):
+										k = k or self.k # 随机游走的最大步数
+										bs, n, _ = E.shape
+										# 如果需要归一化，计算转移矩阵 D^{-1}A
+										if self.normalize:
+											# 初始化度矩阵
+											degree = torch.zeros(bs, n, n, device=E.device)
+											
+											# 计算出度（每个节点的度数）
+											# 对于无向图：出度 = 入度 = 度数
+											# 由于 D 是对角矩阵，所以 D 的逆矩阵 D^{-1} 就是对角线元素取倒 
+											to_fill = 1 / (E.sum(dim=-1).float())
+											
+											# 孤立节点度数为 0，1/0 = inf
+											# 找到原本为 0 的地方，全部将 inf 替换为 0
+											to_fill[E.sum(dim=-1).float() == 0] = 0
+											# to_fill.shape:[非孤立节点数, 1]
+											
+											# 构造对角度矩阵
+											# degree 是三维向量，写回到第2、3维度里
+											degree = torch.diagonal_scatter(degree, to_fill, dim1=1, dim2=2)
+											
+											# 转移矩阵 = D^{-1} @ A
+											E = degree @ E
+											
+										# 初始化：第 0 步即是单位矩阵 I
+										# [n, n] 单位矩阵，unsqueeze(0) 增加 batch 维度到 [1, n, n]，repeat(bs, 1, 1) 复制 bs 份 [bs, n, n] 
+										id = torch.eye(n, device=E.device).unsqueeze(0).repeat(bs, 1, 1)
+										# 列表用来存储所有步数的矩阵，目前只有 P^0
+										rrwp_list = [id]
 										
-										# 计算出度（每个节点的度数）
-										# 对于无向图：出度 = 入度 = 度数
-										# 由于 D 是对角矩阵，所以 D 的逆矩阵 D^{-1} 就是对角线元素取倒 
-										to_fill = 1 / (E.sum(dim=-1).float())
-										
-										# 孤立节点度数为 0，1/0 = inf
-										# 找到原本为 0 的地方，全部将 inf 替换为 0
-										to_fill[E.sum(dim=-1).float() == 0] = 0
-										# to_fill.shape:[非孤立节点数, 1]
-										
-										# 构造对角度矩阵
-										# degree 是三维向量，写回到第2、3维度里
-										degree = torch.diagonal_scatter(degree, to_fill, dim1=1, dim2=2)
-										
-										# 转移矩阵 = D^{-1} @ A
-										E = degree @ E
+										# 迭代计算 P^1, P^2, ..., P^{k-1}
+										for i in range(k - 1):
+											cur_rrwp = rrwp_list[-1] @ E  #  P^{i+1} = P^i @ E
+											rrwp_list.append(cur_rrwp)
+										return torch.stack(rrwp_list, -1)
+										# 堆栈成 [bs, n, n, k]
 							```
-						3. 开始游走，迭代计算
+						3. 提取节点特征
 							```python
-							# 初始化：第 0 步即是单位矩阵 I
-							# [n, n] 单位矩阵，unsqueeze(0) 增加 batch 维度到 [1, n, n]，repeat(bs, 1, 1) 复制 bs 份 [bs, n, n] 
-							id = torch.eye(n, device=E.device).unsqueeze(0).repeat(bs, 1, 1)
-							# 列表用来存储所有步数的矩阵，目前只有 P^0
-							rrwp_list = [id]
-							
-							# 迭代计算 P^1, P^2, ..., P^{k-1}
-							for i in range(k - 1):
-								cur_rrwp = rrwp_list[-1] @ E  #  P^{i+1} = P^i @ E
-								rrwp_list.append(cur_rrwp)
-							
-							# 堆栈成 [bs, n, n, k]
-							return torch.stack(rrwp_list, -1)
-							```
-						4. 提取节点特征
-							```python
+							# step 3
 							# 从对角线上提取节点特征（A^k[i,i] 对角元素）
 							# 生成对角线索引
 							diag_index = torch.arange(rrwp_edge_attr.shape[1])
@@ -307,6 +307,12 @@
 							# rrwp_edge_attr[:, 2, 2, :]  → 节点2的对角特征
 							# 由于取 n 个对角线元素，维度减少了一个
 							rrwp_node_attr = rrwp_edge_attr[:, diag_index, diag_index, :]  # (bs, n, k)
+							
+							return utils.PlaceHolder(
+								X=rrwp_node_attr,  # 节点级 RRWP 特征 [bs, n, k]
+								E=rrwp_edge_attr,  # 边级 RRWP 特征 [bs, n, n, k]
+								y=torch.hstack((n, y_cycles)),  # 全局特征 [bs, n_cycles]
+							)
 							```
 					4. 总结
 						- `rrwp_edge_attr` 告诉模型：节点 $i$ 和节点 $j$ 之间的"图上距离"是多少，它们通过多少步可以互相到达，以及它们之间有多少条路径连接

@@ -1,7 +1,7 @@
 1. `graph_discrete_flow_model.py` —— `training_step`
-	1.  将`batch_data`稀疏图转换为`dense_data`稠密图 
+	1.  将`batch_data`稀疏图转换为`dense_data`稠密图 —— `dense_data, node_mask = utils.to_dense(...)`
 		- `utils.to_dense()` 详细过程在 [[从 0 开始的 DeFoG#^todense]]
-	2. 对稠密图进行掩码`mask`
+	2. 对稠密图进行掩码`mask` —— `dense_data = dense_data.mask(node_mask)`
 		- 将 padding 的 （无效的）节点和边全部 mask 掉
 			```python
 			def mask(self, node_mask, collapse=False):
@@ -37,7 +37,7 @@
 				assert torch.allclose(self.E, torch.transpose(self.E, 1, 2)) # # 交换第 1, 2 维（行列互换）
 			return self
 			```
-	3. 采样噪声，并对数据进行加噪
+	3. 采样噪声，并对数据进行加噪 ——  `noisy_data = self.apply_noise(X, E, data.y, node_mask)`
 		1. 采样一个时间步
 			```python
 			 def apply_noise(self, X, E, y, node_mask, t=None):
@@ -238,11 +238,25 @@
 				
 			return noisy_data
 			```
-	4. 计算特征
+	4. 计算特征 —— `extra_data = self.compute_extra_data(noisy_data)`
 		1. 图的额外特征
 			- `rrwp` 详细过程在 [[从 0 开始的 DeFoG#^extragraphfeatures]]
 		2. 分子的额外特征
 			- `domain_features` 详细过程在 [[从 0 开始的 DeFoG#^extramolfeatures]]
 		3. 时间特征
 			- `t = noisy_data["t"]`，并将时间作为全局特征 `y` 加入：`extra_y = torch.cat((extra_y, t), dim=1)` 
-	5. 模型训练
+	5. 模型训练 —— `pred = self.forward(noisy_data, extra_data, node_mask)`
+		1. 前向传播函数
+			```python
+			def forward(self, noisy_data, extra_data, node_mask):
+				# 节点特征拼接 [bs, n, dx] + [bs, n, k] 沿维度二拼接 → [bs, n, dx+k]
+				X = torch.cat((noisy_data["X_t"], extra_data.X), dim=2).float()
+				# 边特征拼接 [bs, n, n, de] + [bs, n, n, k] 沿维度三拼接 → [bs, n, n, de+k]
+				E = torch.cat((noisy_data["E_t"], extra_data.E), dim=3).float()
+				# 全局特征拼接 [bs, dy] + [bs, n_cycles] 沿最后一个维度拼接 → [bs, dy+n_cycles]
+				y = torch.hstack((noisy_data["y_t"], extra_data.y)).float()
+				
+				return self.model(X, E, y, node_mask) # 传入模型进行预测
+			```
+		2. 图 Transformer 初始化
+		3. 图 Transfomer 前向传播
