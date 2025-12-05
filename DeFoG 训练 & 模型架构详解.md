@@ -388,14 +388,14 @@
 						# output = γ ⋅input + β
 						
 						# FiLM E to X
-						# 用边特征调制注意力分数
+						# 用边特征调制节点注意力分数
 						self.e_add = Linear(de, dx) # 偏置 β
 						self.e_mul = Linear(de, dx) # 缩放 γ
 						
 						# FiLM y to E
 						# 用全局特征调制边
 						self.y_e_mul = Linear(dy, dx)  # Warning: here it's dx and not de
-						self.y_e_add = Linear(dy, dx)
+						self.y_e_add = Linear(dy, dx)  # 因为实际上 E.shape 变成了 [bs, n, n, dx]
 						
 						# FiLM y to X
 						# 用全局特征调制节点
@@ -429,20 +429,34 @@
 						e_mask2 = x_mask.unsqueeze(1)  # bs, 1, n, 1
 						
 						# 1. Map X to keys and queries
+						# 详解线性层 Linear(dx, dx)
+						# 数学原理：Y = X * W^T + b  W^T.shape → [dx, dx]
+						# Linear(in_features, out_features) 层只关注最后一个维度，输入向量的最后一个维度 = in_features
+						# X → [bs, n, dx]; b → [dx]
 						Q = self.q(X) * x_mask  # (bs, n, dx)
 						K = self.k(X) * x_mask  # (bs, n, dx)
+						# 检查掩码是否正确
 						flow_matching_utils.assert_correctly_masked(Q, x_mask)
 						
 						# 2. Reshape to (bs, n, n_head, df) with dx = n_head * df
+						# n_head 注意力头的数量; df 每个注意力头的特征维度
+						# multi-head 关注不同的特征
 						Q = Q.reshape((Q.size(0), Q.size(1), self.n_head, self.df))
 						K = K.reshape((K.size(0), K.size(1), self.n_head, self.df))
 						
+						# 计算每个节点对，保存的结果需要多一个维度
+						# Q[0] * K[0], Q[0] * K[1], Q[0] * K[2], ... 
+						# Q[1] * K[0], Q[1] * K[1], Q[1] * K[2], ...
+						# ...
+						# Q[n] * K[0], Q[n] * K[1], Q[n] * K[2], ...
 						Q = Q.unsqueeze(2)  # (bs, 1, n, n_head, df)
 						K = K.unsqueeze(1)  # (bs, n, 1, n head, df)
 						
 						# Compute unnormalized attentions. Y is (bs, n, n, n_head, df)
-						Y = Q * K
-						Y = Y / math.sqrt(Y.size(-1))
+						Y = Q * K # (bs, n, n, n_head, df)
+						# Scaled Dot-Product Attention 中的 Scale 步骤
+						# Q * K 由于维度很大，点积结果也会很大，softmax 后分布方差过大，导致梯度消失
+						Y = Y / math.sqrt(Y.size(-1)) # 减小注意力的值
 						
 						# # Compute the distance based on the Gaussian kernel
 						# Y_exp = torch.exp(
@@ -454,13 +468,19 @@
 						)
 						
 						# Incorporate edge features to the self attention scores.
-						E1 = self.e_mul(E) * e_mask1 * e_mask2  # bs, n, n, dx
+						# ⭐将边特征融入到 self-attention scores 中
+						
+						# 边调制节点
+						E1 = self.e_mul(E) * e_mask1 * e_mask2  # bs, n, n, dx; e_mul → Linear(de, dx)
 						E1 = E1.reshape((E.size(0), E.size(1), E.size(2), self.n_head, self.df))
-						E2 = self.e_add(E) * e_mask1 * e_mask2  # bs, n, n, dx
+						E2 = self.e_add(E) * e_mask1 * e_mask2  # bs, n, n, dx; e_add → Linear(de, dx)
 						E2 = E2.reshape((E.size(0), E.size(1), E.size(2), self.n_head, self.df))
+						# 初始化时 E1 ≈ 0(线性层初始化)，这样 Y_new ≈ 0 + E2 = E2，导致原始的 Y 信息丢失
+						# 逐渐学习边的调制因子，边的类型会影响注意力强度
 						Y = Y * (E1 + 1) + E2  # (bs, n, n, n_head, df)
 						
 						# Incorporate y to E
+						# 全局调制边
 						newE = Y.flatten(start_dim=3)  # bs, n, n, dx
 						ye1 = self.y_e_add(y).unsqueeze(1).unsqueeze(1)  # bs, 1, 1, de
 						ye2 = self.y_e_mul(y).unsqueeze(1).unsqueeze(1)
