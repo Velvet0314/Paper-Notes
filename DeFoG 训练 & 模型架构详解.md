@@ -377,7 +377,7 @@
 						self.de = de 
 						self.dy = dy 
 						self.df = int(dx / n_head) # 每个注意力头的特征维度
-						self.n_head = n_head
+						self.n_head = n_head # 注意力头数
 						
 						# Attention
 						self.q = Linear(dx, dx) # Query
@@ -470,7 +470,7 @@
 						# Incorporate edge features to the self attention scores.
 						# ⭐将边特征融入到 self-attention scores 中
 						
-						# 边调制节点
+						# 边特征调制节点
 						E1 = self.e_mul(E) * e_mask1 * e_mask2  # bs, n, n, dx; e_mul → Linear(de, dx)
 						E1 = E1.reshape((E.size(0), E.size(1), E.size(2), self.n_head, self.df))
 						E2 = self.e_add(E) * e_mask1 * e_mask2  # bs, n, n, dx; e_add → Linear(de, dx)
@@ -480,18 +480,22 @@
 						Y = Y * (E1 + 1) + E2  # (bs, n, n, n_head, df)
 						
 						# Incorporate y to E
-						# 全局调制边
+						# 全局特征调制边
 						newE = Y.flatten(start_dim=3)  # bs, n, n, dx
-						ye1 = self.y_e_add(y).unsqueeze(1).unsqueeze(1)  # bs, 1, 1, de
+						ye1 = self.y_e_add(y).unsqueeze(1).unsqueeze(1)  # bs, 1, 1, dx
 						ye2 = self.y_e_mul(y).unsqueeze(1).unsqueeze(1)
 						newE = ye1 + (ye2 + 1) * newE
 						
 						# Output E
+						# 将最后一个维度映射回 de(dx → de)
 						newE = self.e_out(newE) * e_mask1 * e_mask2  # bs, n, n, de
 						flow_matching_utils.assert_correctly_masked(newE, e_mask1 * e_mask2)
 						
 						# Compute attentions. attn is still (bs, n, n, n_head, df)
-						softmax_mask = e_mask2.expand(-1, n, -1, self.n_head)  # bs, 1, n, 1
+						# e_mask2.shape: [bs, 1, n, 1]
+						softmax_mask = e_mask2.expand(-1, n, -1, self.n_head) # [bs, n, n, n_head]
+						# dim=2 按行求和，即同一个源节点 Q 对所有目标节点的 K 求和
+						# 做 softmax 时将掩码对应的部分设为 -inf，e^(-inf) = 0
 						attn = masked_softmax(Y, softmax_mask, dim=2)  # bs, n, n, n_head
 						
 						V = self.v(X) * x_mask  # bs, n, dx
