@@ -258,7 +258,7 @@
 				
 				return self.model(X, E, y, node_mask) # 传入模型进行预测
 			```
-		1. 单层 Transformer 架构
+		2. 单层 Transformer 架构
 			- 初始化
 				```python
 				class XEyTransformerLayer(nn.Module):
@@ -360,7 +360,7 @@
 					
 					return X, E, y
 				```
-		2. 单层中的核心：self-attention
+		3. 单层中的核心：self-attention
 			- 初始化
 				```python
 				class NodeEdgeBlock(nn.Module):
@@ -494,7 +494,7 @@
 						# Compute attentions. attn is still (bs, n, n, n_head, df)
 						# e_mask2.shape: [bs, 1, n, 1]
 						softmax_mask = e_mask2.expand(-1, n, -1, self.n_head) # [bs, n, n, n_head]
-						# dim=2 按行求和，即同一个源节点 Q 对所有目标节点的 K 求和
+						# dim=2 按行归一化，即同一个源节点 Q 对所有目标节点的 K 相乘，得到权重
 						# 做 softmax 时将掩码对应的部分设为 -inf，e^(-inf) = 0
 						attn = masked_softmax(Y, softmax_mask, dim=2)  # bs, n, n, n_head
 						
@@ -503,6 +503,7 @@
 						V = V.unsqueeze(1)  # (bs, 1, n, n_head, df)
 						
 						# Compute weighted values
+						# dim=2 按行求和，融合当前节点对所有节点的特征
 						weighted_V = attn * V
 						weighted_V = weighted_V.sum(dim=2)
 						
@@ -510,8 +511,8 @@
 						weighted_V = weighted_V.flatten(start_dim=2)  # bs, n, dx
 						
 						# Incorporate y to X
-						yx1 = self.y_x_add(y).unsqueeze(1)
-						yx2 = self.y_x_mul(y).unsqueeze(1)
+						yx1 = self.y_x_add(y).unsqueeze(1) # [bs, 1, dx]
+						yx2 = self.y_x_mul(y).unsqueeze(1) # [bs, 1, dx]
 						newX = yx1 + (yx2 + 1) * weighted_V
 						
 						# Output X
@@ -519,9 +520,12 @@
 						flow_matching_utils.assert_correctly_masked(newX, x_mask)
 						
 						# Process y based on X axnd E
-						y = self.y_y(y)
-						e_y = self.e_y(E)
-						x_y = self.x_y(X)
+						# 将节点和边的局部特征聚合成全局特征
+						y = self.y_y(y)   # [bs, dy]
+						# Etoy 层 —— mean, min, max, std
+						e_y = self.e_y(E) # [bs, dy]
+						# Xtoy 层 —— mean, min, max, std
+						x_y = self.x_y(X) # [bs, dy]
 						new_y = y + x_y + e_y
 						new_y = self.y_out(new_y)  # bs, dy
 						
@@ -530,4 +534,131 @@
 						
 						return newX, newE, new_y
 				```
-		1. 图 Transfomer 前向传播
+		4. 图 Transformer
+			- 初始化
+				```python
+				class GraphTransformer(nn.Module):
+					"""
+					n_layers : int -- number of layers
+					dims : dict -- contains dimensions for each feature type
+					"""
+					
+					def __init__(
+						self,
+						n_layers: int,
+						input_dims: dict,
+						hidden_mlp_dims: dict,
+						hidden_dims: dict,
+						output_dims: dict,
+						act_fn_in: nn.Module = None,
+						act_fn_out: nn.Module = None,
+					):
+						super().__init__()
+						if act_fn_in is None:
+							act_fn_in = nn.ReLU()
+						if act_fn_out is None:
+							act_fn_out = nn.ReLU()
+							
+						self.n_layers = n_layers
+						self.out_dim_X = output_dims["X"]
+						self.out_dim_E = output_dims["E"]
+						self.out_dim_y = output_dims["y"]
+						
+						self.mlp_in_X = nn.Sequential(
+							nn.Linear(input_dims["X"], hidden_mlp_dims["X"]),
+							act_fn_in,
+							nn.Linear(hidden_mlp_dims["X"], hidden_dims["dx"]),
+							act_fn_in,
+						)
+						
+						self.mlp_in_E = nn.Sequential(
+							nn.Linear(input_dims["E"], hidden_mlp_dims["E"]),
+							act_fn_in,
+							nn.Linear(hidden_mlp_dims["E"], hidden_dims["de"]),
+							act_fn_in,
+						)
+						
+						self.mlp_in_y = nn.Sequential(
+							nn.Linear(input_dims["y"] + 64, hidden_mlp_dims["y"]),
+							act_fn_in,
+							nn.Linear(hidden_mlp_dims["y"], hidden_dims["dy"]),
+							act_fn_in,
+						)
+						
+						self.tf_layers = nn.ModuleList(
+							[
+								XEyTransformerLayer(
+									dx=hidden_dims["dx"],
+									de=hidden_dims["de"],
+									dy=hidden_dims["dy"],
+									n_head=hidden_dims["n_head"],
+									dim_ffX=hidden_dims["dim_ffX"],
+									dim_ffE=hidden_dims["dim_ffE"],
+								)
+								for i in range(n_layers)
+							]
+						)
+						
+						self.mlp_out_X = nn.Sequential(
+							nn.Linear(hidden_dims["dx"], hidden_mlp_dims["X"]),
+							act_fn_out,
+							nn.Linear(hidden_mlp_dims["X"], output_dims["X"]),
+						)
+						
+						self.mlp_out_E = nn.Sequential(
+							nn.Linear(hidden_dims["de"], hidden_mlp_dims["E"]),
+							act_fn_out,
+							nn.Linear(hidden_mlp_dims["E"], output_dims["E"]),
+						)
+						
+						self.mlp_out_y = nn.Sequential(
+							nn.Linear(hidden_dims["dy"], hidden_mlp_dims["y"]),
+							act_fn_out,
+							nn.Linear(hidden_mlp_dims["y"], output_dims["y"]),
+						)
+				```
+			- 前向传播
+				```python
+				def forward(self, X, E, y, node_mask):
+					bs, n = X.shape[0], X.shape[1]
+					# 排除对角线的自环
+					diag_mask = torch.eye(n)
+					diag_mask = ~diag_mask.type_as(E).bool()
+					diag_mask = diag_mask.unsqueeze(0).unsqueeze(-1).expand(bs, -1, -1, -1)
+					
+					# 保存原始输入用于残差连接
+					X_to_out = X[..., : self.out_dim_X]
+					E_to_out = E[..., : self.out_dim_E]
+					y_to_out = y[..., : self.out_dim_y]
+					
+					# 边特征对称化
+					new_E = self.mlp_in_E(E)
+					new_E = (new_E + new_E.transpose(1, 2)) / 2
+					
+					# encode time steps additionally
+					time_emb = timestep_embedding(y[:, -1].unsqueeze(-1), 64)
+					y = torch.hstack([y, time_emb])
+					
+					# 升维度进 Transformer
+					after_in = utils.PlaceHolder(
+						X=self.mlp_in_X(X), E=new_E, y=self.mlp_in_y(y)
+					).mask(node_mask)
+					X, E, y = after_in.X, after_in.E, after_in.y
+					
+					for layer in self.tf_layers:
+						X, E, y = layer(X, E, y, node_mask)
+					
+					# 降维度
+					X = self.mlp_out_X(X)
+					E = self.mlp_out_E(E)
+					y = self.mlp_out_y(y)
+					
+					# 残差连接
+					X = X + X_to_out
+					E = (E + E_to_out) * diag_mask
+					y = y + y_to_out
+					
+					E = 1 / 2 * (E + torch.transpose(E, 1, 2))
+					
+					return utils.PlaceHolder(X=X, E=E, y=y).mask(node_mask)
+				```
