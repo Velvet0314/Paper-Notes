@@ -33,7 +33,7 @@
 			* $\mathcal{V}$：该分子图中所有原子的集合
 			* $\text{READOUT}(\cdot)$：读出函数，也叫全局池化（Global Pooling）
 	3. 预测机制
-		$$\hat{\mathbf{y}}_{\tau, q} = f(\mathbf{r}_{\tau, q} | \{ \mathbf{r}_{\tau, s} \}_{s \in \mathcal{S}_\tau}) \tag{2}$$
+		$$\hat{\mathbf{y}}_{\tau, q} = f(\mathbf{r}_{\tau, q} | \{ \mathbf{r}_{\tau, s} \}_{s \in \mathcal{S}_\tau}) \tag{3}$$
 		- 变量定义：
 			* $\hat{y}_{\tau, q}$：针对查询分子 $q$ 在任务 $\tau$ 上的预测结果（标签）
 			* $\mathbf{r}_{\tau, q}$：查询分子（Query）的向量表示（由公式 2 得到）
@@ -122,3 +122,23 @@
 					    * 注意：$\gamma$ 和 $p$ 本身不是 $\Theta$，它们是 $\Theta$ 的输出
 				* $\mathcal{L}_\tau$：单个任务 $\tau$ 的损失
 				* $\mathbf{y}^\top \log (\hat{\mathbf{y}})$：标准的**交叉熵损失 (Cross-Entropy Loss)**
+4. 元学习的训练流程
+	<div style="text-align: center;"> <img src="meta-PACIA.png" width="400"> </div>
+	
+	- 输入：元学习的任务集 $\mathcal{T}_{train}$
+	- 阶段一：Encoder 适应 (Task-Level Adaptation)
+		1. line 1：初始化 ——  GNN 的权重、Relation Graph 的权重，以及**生成适配参数的超网络的权重**
+		2. line 2~8：从任务集中采样一个任务
+			- 遍历 GNN Encoder 的每一层
+			- 通过**超网络**调用公式10，输入公式9得到的 Support 的正/负原型向量，得到当前层的适配参数 $\gamma_\tau^l$ 和 $p_\tau^l$ 
+			- 通过适配参数调制 **GNN** 的原子嵌入（公式6）
+			- 通过 **主干网络（GNN）** 更新原子的 Embedding
+		3. line 9：利用生成的 $p$，进行深度调制，得到最终的原子特征，并使用公式2将原子特征聚合成分子特征
+	- 阶段二：Predictor 适应 (Query-Level Adaptation)
+		1. line 11~16：从 Query 中采样一个需要预测的分子
+			- 遍历关系图网络的每一层
+			- 通过**超网络**调用公式11，输入 Support + 当前 Query 的特征，得到针对当前 Query 定制的适配参数 ${\gamma}_{\tau, q}^l, p_{\tau, q}^l$
+			- 通过适配参数调制**关系图**的节点嵌入（公式6）
+			- 通过 **主干网络（关系图）** 计算 Query 和 Support 的相似度（公式4），并更新分子的特征（公式5）
+		2. line 17：利用生成的 $p$，进行深度调制
+		3. line 18：输出最终预测结果
